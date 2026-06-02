@@ -1,15 +1,11 @@
+firebase_key.json
+foxus-ai-da4ad-firebase-adminsdk-fbsvc-9e8a1125fc.json
 venv/
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 *.npy
 *.h5
 *.pt
 *.pth
-*.joblib
-*.pickle
-*.pkl
-.env
 .gradle/
 build/

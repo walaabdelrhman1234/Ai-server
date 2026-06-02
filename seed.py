@@ -1,102 +1,104 @@
-# ==============================
-# Firebase Seeder (Full Setup)
-# ==============================
-
 import firebase_admin
 from firebase_admin import credentials, firestore
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# ===== Initialize Firebase =====
+# ================= INIT FIREBASE =================
 cred = credentials.Certificate("firebase_key.json")
 firebase_admin.initialize_app(cred)
+
 db = firestore.client()
 
-# ================= USERS =================
-def seed_users():
-    print(" Seeding Users...")
+# ================= DELETE COLLECTION =================
+def delete_collection(collection_name, batch_size=50):
+    coll_ref = db.collection(collection_name)
+    docs = coll_ref.limit(batch_size).stream()
+
+    deleted = 0
+
+    for doc in docs:
+        print(f"Deleting {collection_name}/{doc.id}")
+        doc.reference.delete()
+        deleted += 1
+
+    if deleted >= batch_size:
+        return delete_collection(collection_name, batch_size)
+
+# ================= RESET DATABASE =================
+def reset_database():
+    collections = [
+        "users",
+        "sessions",
+        "alerts",
+        "exams",
+        "cheating_logs"
+    ]
+
+    for c in collections:
+        delete_collection(c)
+        print(f"{c} CLEARED")
+
+    print(" ALL COLLECTIONS DELETED")
+
+
+# ================= REBUILD DATABASE =================
+def rebuild_database():
+
+    # USERS
+    db.collection("users").document("student1").set({
+        "name": "Walaa",
+        "email": "walaa@gmail.com",
+        "role": "student",
+        "isActive": True,
+        "faceImageUrl": ""
+    })
 
     db.collection("users").document("admin1").set({
         "name": "Admin",
-        "email": "admin@test.com",
+        "email": "admin@gmail.com",
         "role": "admin",
-        "isActive": True
+        "isActive": True,
+        "faceImageUrl": ""
     })
 
-    db.collection("users").document("student1").set({
-        "name": "Shamose",
-        "email": "student@test.com",
-        "role": "student",
-        "isActive": True
-    })
-
-
-# ================= SESSIONS =================
-def seed_sessions():
-    print(" Seeding Sessions...")
-
+    # SESSION
     db.collection("sessions").document("Exam2").set({
-        "title": "Computer Exam",
-        "createdBy": "admin1",
+        "studentId": "student1",
+        "studentName": "Walaa",
         "startTime": datetime.now(),
-        "endTime": datetime.now() + timedelta(hours=2),
-        "status": "active"
-    })
-
-
-# ================= LIVE STUDENTS =================
-def seed_live_students():
-    print("📡 Seeding Live Students...")
-
-    db.collection("live_students").document("student1").set({
-        "name": "Shamose",
-        "sessionId": "Exam2",
-        "status": "normal",
-        "level": "green",
+        "endTime": None,
+        "status": "running",
         "cheatingCount": 0,
-        "lastUpdate": datetime.now()
+        "score": 0,
+        "duration": 0,
+        "faceVerified": True
     })
 
-
-# ================= ALERTS =================
-def seed_alerts():
-    print(" Seeding Alerts...")
-
-    db.collection("alerts").add({
-        "studentId": "student1",
-        "studentName": "Shamose",
-        "sessionId": "Exam2",
-        "type": "eye_tracking",
-        "confidence": 0.92,
-        "level": "yellow",
-        "message": "Looking away detected",
-        "timestamp": datetime.now()
+    # EXAMS
+    db.collection("exams").document("exam1").set({
+        "title": "AI Test",
+        "duration": 30,
+        "questions": [
+            {
+                "question": "What is AI?",
+                "options": ["Animal", "AI", "Input", "None"],
+                "answer": 1
+            },
+            {
+                "question": "What is Flutter?",
+                "options": ["Framework", "DB", "OS", "Game"],
+                "answer": 0
+            }
+        ]
     })
 
-
-# ================= CHEATING LOGS =================
-def seed_logs():
-    print(" Seeding Logs...")
-
-    db.collection("cheating_logs").add({
-        "studentId": "student1",
-        "sessionId": "Exam2",
-        "event": "looking_left",
-        "confidence": 0.92,
-        "timestamp": datetime.now()
-    })
+    print(" DATABASE REBUILT SUCCESSFULLY")
 
 
-# ================= RUN ALL =================
-def run_all():
-    seed_users()
-    seed_sessions()
-    seed_live_students()
-    seed_alerts()
-    seed_logs()
-
-    print(" Firebase Setup Completed Successfully!")
-
-
-# ===== RUN =====
+# ================= RUN =================
 if __name__ == "__main__":
-    run_all()
+    print(" STARTING SEED SCRIPT...")
+
+    reset_database()
+    rebuild_database()
+
+    print(" DONE  FIREBASE IS READY")

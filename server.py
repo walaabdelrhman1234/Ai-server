@@ -5,7 +5,8 @@ import mediapipe as mp
 import numpy as np
 import base64
 import joblib
-import time
+import requests
+import face_recognition
 
 # ============================================
 # LOAD MODEL
@@ -14,7 +15,7 @@ import time
 model = joblib.load("models/svm_eye_model.pkl")
 scaler = joblib.load("models/scaler.pkl")
 
-print(" MODEL LOADED")
+print("MODEL LOADED")
 
 # ============================================
 # FLASK
@@ -35,14 +36,14 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_tracking_confidence=0.5
 )
 
-print(" MEDIAPIPE READY")
+print("MEDIAPIPE READY")
 
 # ============================================
 # SETTINGS
 # ============================================
 
-MODEL_THRESHOLD = 0.85
-DEVIATION_THRESHOLD = 0.08
+MODEL_THRESHOLD = 0.90
+DEVIATION_THRESHOLD = 0.18
 
 # ============================================
 # MEMORY
@@ -80,12 +81,21 @@ def analyze():
 
         data = request.json
 
+        print("REQUEST RECEIVED")
+
         if "image" not in data:
             return jsonify({
-                "status": "error"
+                "status": "error",
+                "message": "No image received"
             })
 
         image_data = data["image"]
+
+        print("IMAGE RECEIVED")
+
+        # ============================================
+        # DECODE IMAGE
+        # ============================================
 
         image_bytes = base64.b64decode(image_data)
 
@@ -95,18 +105,30 @@ def analyze():
 
         if frame is None:
             return jsonify({
-                "status": "error"
+                "status": "error",
+                "message": "Frame decode failed"
             })
 
         frame = cv2.flip(frame, 1)
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+        # ============================================
+        # FACE MESH
+        # ============================================
+
         results = face_mesh.process(rgb)
+
+        print("FACE PROCESSING DONE")
 
         suspicious = False
         probability = 0.0
         deviation = 0.0
+
+        verified = True
+        similarity = 1.0
+
+        direction = "CENTER"
 
         # ============================================
         # FACE FOUND
@@ -114,12 +136,94 @@ def analyze():
 
         if results.multi_face_landmarks:
 
+            print("FACE DETECTED")
+
+            # ✅ رجع العداد للصفر
             missing_counter = 0
+
+            # ============================================
+            # FACE VERIFICATION
+            # ============================================
+
+            try:
+
+                if "face_url" in data and data["face_url"] != "":
+
+                    print("START FACE VERIFICATION")
+
+                    face_url = data["face_url"]
+
+                    response = requests.get(
+                        face_url,
+                        stream=True
+                    )
+
+                    known_image = face_recognition.load_image_file(
+                        response.raw
+                    )
+
+                    current_rgb = cv2.cvtColor(
+                        frame,
+                        cv2.COLOR_BGR2RGB
+                    )
+
+                    known_encodings = face_recognition.face_encodings(
+                        known_image
+                    )
+
+                    current_encodings = face_recognition.face_encodings(
+                        current_rgb
+                    )
+
+                    if (
+                        len(known_encodings) > 0 and
+                        len(current_encodings) > 0
+                    ):
+
+                        known_encoding = known_encodings[0]
+
+                        current_encoding = current_encodings[0]
+
+                        distance = face_recognition.face_distance(
+                            [known_encoding],
+                            current_encoding
+                        )[0]
+
+                        similarity = 1 - float(distance)
+
+                        # ✅ خففنا التحقق
+                        verified = similarity > 0.45
+
+                        print("SIMILARITY:", similarity)
+                        print("VERIFIED:", verified)
+
+                    else:
+
+                        print("NO FACE ENCODINGS")
+
+                        # ❌ ما نعمل بلوك مباشرة
+                        verified = True
+
+            except Exception as e:
+
+                print("FACE VERIFY ERROR:", e)
+
+                # ❌ ما نعمل بلوك بسبب خطأ سيرفر
+                verified = True
+
+            # ============================================
+            # LANDMARKS
+            # ============================================
 
             lm = results.multi_face_landmarks[0].landmark
 
-            l_out, l_in, l_top, l_bottom = [lm[i] for i in LEFT_EYE]
-            r_out, r_in, r_top, r_bottom = [lm[i] for i in RIGHT_EYE]
+            l_out, l_in, l_top, l_bottom = [
+                lm[i] for i in LEFT_EYE
+            ]
+
+            r_out, r_in, r_top, r_bottom = [
+                lm[i] for i in RIGHT_EYE
+            ]
 
             l_pupil = lm[LEFT_IRIS]
             r_pupil = lm[RIGHT_IRIS]
@@ -129,6 +233,7 @@ def analyze():
             # ============================================
 
             left_width = abs(l_in.x - l_out.x)
+
             right_width = abs(r_in.x - r_out.x)
 
             gaze_x_left = (
@@ -141,13 +246,16 @@ def analyze():
                 if right_width != 0 else 0.5
             )
 
-            gaze_x = (gaze_x_left + gaze_x_right) / 2
+            gaze_x = (
+                gaze_x_left + gaze_x_right
+            ) / 2
 
             # ============================================
             # GAZE Y
             # ============================================
 
             left_height = abs(l_top.y - l_bottom.y)
+
             right_height = abs(r_top.y - r_bottom.y)
 
             gaze_y_left = (
@@ -160,7 +268,33 @@ def analyze():
                 if right_height != 0 else 0.5
             )
 
-            gaze_y = (gaze_y_left + gaze_y_right) / 2
+            gaze_y = (
+                gaze_y_left + gaze_y_right
+            ) / 2
+
+            print("GAZE X:", gaze_x)
+            print("GAZE Y:", gaze_y)
+
+            # ============================================
+            # DETECT DIRECTION
+            # ============================================
+
+            if gaze_x < 0.28:
+                direction = "LEFT"
+
+            elif gaze_x > 0.72:
+                direction = "RIGHT"
+
+            elif gaze_y < 0.25:
+                direction = "UP"
+
+            elif gaze_y > 0.80:
+                direction = "DOWN"
+
+            else:
+                direction = "CENTER"
+
+            print("DIRECTION:", direction)
 
             # ============================================
             # CALIBRATION
@@ -169,6 +303,8 @@ def analyze():
             if not calibrated:
 
                 baseline.append([gaze_x, gaze_y])
+
+                print("CALIBRATING:", len(baseline))
 
                 if len(baseline) >= 20:
 
@@ -179,11 +315,17 @@ def analyze():
 
                     calibrated = True
 
-                    print(" CALIBRATION DONE")
+                    print("CALIBRATION DONE")
 
                 return jsonify({
+
                     "status": "calibrating",
-                    "counter": len(baseline)
+
+                    "counter": len(baseline),
+
+                    "verified": verified,
+
+                    "similarity": similarity
                 })
 
             # ============================================
@@ -191,30 +333,33 @@ def analyze():
             # ============================================
 
             features = np.array([[
-
                 np.mean([gaze_x, gaze_y]),
                 np.max([gaze_x, gaze_y]),
                 np.std([gaze_x, gaze_y])
-
             ]])
 
-            features_scaled = scaler.transform(features)
+            print("FEATURES:", features)
+
+            features_scaled = scaler.transform(
+                features
+            )
 
             probability = model.predict_proba(
                 features_scaled
             )[0][1]
+
+            print("CHEATING PROBABILITY:", probability)
 
             # ============================================
             # DEVIATION
             # ============================================
 
             deviation = np.linalg.norm(
-                np.array([gaze_x, gaze_y]) - baseline_mean
+                np.array([gaze_x, gaze_y]) -
+                baseline_mean
             )
 
-            print(" FEATURES:", features)
-            print(" PROB:", probability)
-            print(" DEV:", deviation)
+            print("DEVIATION:", deviation)
 
             # ============================================
             # BLINK FILTER
@@ -222,51 +367,103 @@ def analyze():
 
             blink = False
 
-            if left_height < 0.01 or right_height < 0.01:
+            if (
+                left_height < 0.01 or
+                right_height < 0.01
+            ):
                 blink = True
 
+                print("BLINK DETECTED")
+
             # ============================================
-            # HYBRID AI
+            # IGNORE SMALL MOVEMENTS
             # ============================================
 
-            if not blink:
+            if deviation < 0.18:
+                suspicious = False
 
-                if (
-                    probability > MODEL_THRESHOLD and
-                    deviation > DEVIATION_THRESHOLD
-                ):
-                    suspicious = True
+            else:
 
-                elif deviation > 0.12:
-                    suspicious = True
+                if not blink:
+
+                    if (
+                        probability > MODEL_THRESHOLD and
+                        deviation > DEVIATION_THRESHOLD
+                    ):
+
+                        suspicious = True
+
+                        print("CHEATING DETECTED BY MODEL")
+
+                    elif deviation > 0.25:
+
+                        suspicious = True
+
+                        print("CHEATING DETECTED BY DEVIATION")
+
+            # ============================================
+            # FACE NOT VERIFIED
+            # ============================================
+
+            if not verified:
+
+                suspicious = True
+
+                print("FACE NOT VERIFIED")
 
         else:
 
+            print("NO FACE DETECTED")
+
             missing_counter += 1
 
-            if missing_counter > 2:
+            # ✅ ما يعمل بلوك من اول مرة
+            if missing_counter >= 5:
+
                 suspicious = True
+                verified = False
                 probability = 0.95
 
+                print("MULTIPLE FACE MISSING")
+
+            else:
+
+                suspicious = False
+                verified = True
+
         # ============================================
-        # RESULT
+        # FINAL RESULT
         # ============================================
 
-        return jsonify({
+        result_data = {
 
             "status": "success",
-            "cheating": suspicious,
-            "probability": float(probability),
-            "deviation": float(deviation)
 
-        })
+            "cheating": suspicious,
+
+            "probability": float(probability),
+
+            "deviation": float(deviation),
+
+            "verified": verified,
+
+            "similarity": float(similarity),
+
+            "direction": direction
+        }
+
+        print("FINAL RESULT:", result_data)
+
+        return jsonify(result_data)
 
     except Exception as e:
 
-        print(" SERVER ERROR:", e)
+        print("SERVER ERROR:", e)
 
         return jsonify({
+
             "status": "error",
+
             "message": str(e)
         })
 
@@ -276,7 +473,7 @@ def analyze():
 
 if __name__ == "__main__":
 
-    print(" HYBRID SERVER RUNNING")
+    print("HYBRID AI SERVER RUNNING...")
 
     app.run(
         host="0.0.0.0",
